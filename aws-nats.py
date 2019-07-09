@@ -17,7 +17,7 @@
 # Author: Danko Miocevic
 
 """
-aws-nats - A script to manage a NATS cluster under AWS using CloudFormation 
+aws-nats - A script to manage a NATS cluster under AWS using CloudFormation
 """
 
 import boto3
@@ -30,23 +30,30 @@ DYNAMO_NAME = ""
 SERVERS_TIMEOUT = 30
 DELETE_TIMEOUT = 300
 INSTANCE_ID = ""
-PUBLIC_IP = ""
+INSTANCE_IP = ""
 NATS_CONFIG_FILE = 'gnats.conf'
 CONFIG_FILE = 'aws-nats.conf'
 NATS_USER = ""
 NATS_PASS = ""
 NATS_TIME = 1
 
-def get_public_ip():
+def get_INSTANCE_IP():
     """
-    Gets the public ip of the actual server from the meta-data service.
+    Gets the ip of the actual server from the meta-data service.
     """
-    global PUBLIC_IP
+    global INSTANCE_IP
     response = requests.get('http://169.254.169.254/latest/meta-data/public-ipv4')
     if response.status_code != 200 :
         print "Error retrieving public ip."
-        return
-    PUBLIC_IP = response.text
+        response = requests.get('http://169.254.169.254/latest/meta-data/local-ipv4')
+        if response.status_code != 200 :
+            print "Error retrieving private ip."
+            return
+        else :
+            print "Got private ip."
+    else :
+        print "Got public ip."
+    INSTANCE_IP = response.text
 
 
 def get_instance_id():
@@ -59,7 +66,7 @@ def get_instance_id():
         print "Error retrieving instance id."
         return
     INSTANCE_ID = response.text
-    
+
 
 def get_config():
     """
@@ -92,7 +99,7 @@ def get_config():
     except:
         print "Cannot open config"
         return False
-    
+
     try:
         DYNAMO_NAME = Config.get('DynamoDB', 'table')
     except:
@@ -110,7 +117,7 @@ def get_config():
     except:
         print "Cannot read delete timeout"
         return False
-   
+
     try:
         NATS_USER = Config.get('user', 'nats_user')
         NATS_PASS = Config.get('user', 'nats_pass')
@@ -125,24 +132,24 @@ def get_servers():
     """
     Gets the server list from DynamoDB Table.
     Only the servers that are alive will be selected.
-    The servers that have been there too much time 
+    The servers that have been there too much time
     without sending keepalives will be deleted.
     """
     print "Create list of active servers."
     timestamp = int(time.time())
     dbclient = boto3.resource('dynamodb')
-    table = dbclient.Table(DYNAMO_NAME) 
+    table = dbclient.Table(DYNAMO_NAME)
     response = table.scan()
     items = response['Items']
     results = []
     for item in items:
-        if item['ip'] == PUBLIC_IP:
+        if item['ip'] == INSTANCE_IP:
             # Ignore if it is myself.
             continue
         if item['time'] > timestamp - SERVERS_TIMEOUT:
             # The server recently sent a keepalive.
             print "Add %s" % item['ip']
-            results.append(item['ip']) 
+            results.append(item['ip'])
         if item['time'] < timestamp - DELETE_TIMEOUT:
             # The server has been inactive for too long.
             print "Delete %s" % item['ip']
@@ -197,7 +204,7 @@ def touch_status(status):
     table = dbclient.Table(DYNAMO_NAME)
     table.put_item(
         Item={
-            'ip': PUBLIC_IP,
+            'ip': INSTANCE_IP,
             'time': timestamp,
             'status': status
         }
@@ -208,12 +215,12 @@ def set_description(description):
     Adds a description of what is the server
     doing.
     """
-    print "Setting description: %s" % description 
+    print "Setting description: %s" % description
     dbclient = boto3.resource('dynamodb')
     table = dbclient.Table(DYNAMO_NAME)
     table.update_item(
         Key={
-            'ip': PUBLIC_IP
+            'ip': INSTANCE_IP
         },
         UpdateExpression="set description = :desc",
         ExpressionAttributeValues={
@@ -233,7 +240,7 @@ def run_nats():
 
 def check_nats():
     """
-    Connect to the internal mini server in the gnatsd 
+    Connect to the internal mini server in the gnatsd
     and request a list of routes to check if the server
     is still alive.
 	"""
@@ -289,27 +296,27 @@ def goodbye():
     """
     touch_status('error')
     set_status('Unhealthy')
-    
+
 
 def main(argv):
     process_args(argv)
-    get_public_ip()
+    get_INSTANCE_IP()
     get_instance_id()
     if not get_config():
         print "Error reading config."
-        sys.exit(10) 
+        sys.exit(10)
 
-    try: 
+    try:
         servers = get_servers()
     except:
         print "Cannot access DynamoDB"
-        sys.exit(20) 
+        sys.exit(20)
 
     try:
         touch_status('starting')
     except:
         print "Cannot change status."
-        sys.exit(30) 
+        sys.exit(30)
 
     atexit.register(goodbye)
     try:
@@ -325,7 +332,7 @@ def main(argv):
         print "Cannot generate NATS configuration."
         set_description("Cannot generate NATS configuration.")
         touch_status('error')
-        sys.exit(50) 
+        sys.exit(50)
 
     try:
         run_nats()
@@ -337,7 +344,7 @@ def main(argv):
 
     while(True):
         try:
-            check_nats() 
+            check_nats()
         except:
             print "NATS is dead!"
             set_description("NATS is dead!")
